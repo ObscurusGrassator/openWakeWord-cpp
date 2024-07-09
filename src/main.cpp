@@ -57,6 +57,7 @@
   }
 
   void end() {
+    AAudioStream_requestStop(stream);
     AAudioStream_close(stream);
     close(fifoIn);
     fclose(stdin);

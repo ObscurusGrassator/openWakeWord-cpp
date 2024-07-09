@@ -43,8 +43,11 @@ android {
     }
 ```
 
-Example of Android service is in `openWakeWord-cpp/src/android/OpenWakeWordServiceExample.java`. C++ part is defaulted end after waking, and started after manualy calling the service (intend) again.
-- Extras with `end` property end process.
-- Extras with `keyword` start service and set wake model path. Optional is `sensitivity` as string value;
+Example of Android service is in `openWakeWord-cpp/src/android/OpenWakeWordServiceExample.java`. There C++ part is defaulted end after waking, and started after manualy calling the service (intend) again.
+- Extras with `end` property end service.
+- Extras with `stop` property end cpp subprocess.
+- Extras with `keyword` property start service, or only cpp subprocess, and set wake word model path. Default is `models/alexa_v0.1.onnx`.
+    - Optional extras `sensitivity` as string value. Default is `0.5`.
+    - Optional extras `closeServiceAfterWakeWordActivation` property end android service after waking (cpp subprocess is end by hardcode). Default is `false`.
 - Don't forget to create first `NotificationChannel` in MainActivity.
 - Android destroy service automaticly after same time, that's why you must set `Worker`, which will call this service each 16 minutes.

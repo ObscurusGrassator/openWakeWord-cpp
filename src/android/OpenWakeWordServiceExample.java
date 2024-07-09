@@ -1,4 +1,4 @@
-package com.example;
+package com.jjassistant;
 
 import android.app.Service;
 import android.media.AudioManager;
@@ -57,62 +57,86 @@ public class OpenWakeWordServiceExample extends Service {
 
     private static AssetManager mgr;
 
-    private static Boolean isRunning = false;
-    private static Boolean ending = false;
-    private static boolean cppIsRunning = false;
+    //   0 - app is starting ...
+    // * 1 - app is runned                      // _STARTED
+    //   2 - app is stopping ..
+    //   21 - waking or  cpp end ...
+    // * 22 - waking and cpp end                // _STOPPED
+    //   23 - cpp starting ..
+    //   3 - closing strems (after cpp end) ...
+    // * 4 - app is dead                        // _ENDED
+    private static Number lifeCycle = 4;
+    private static Boolean endApp = false;
+    private static Boolean stopApp = false;
 
+    private static boolean closeServiceAfterWakeWordActivation = false;
     private static int deviceId = 0;
-    private static boolean endAfterActivation = true;
     private static OpenWakeWordOptionsExample opts = new OpenWakeWordOptionsExample();
     private static String fifoOutFileName;
     private static String fifoInFileName;
+    private static WorkManager worker;
 
-    public static String workerID = "abc";
+    public static String requestID;
+    public static String intentFilterBroadcastString;
+    public static String workerName = "JJPluginWakeWordServiceRestertWorker";
 
-    public native void openWakeWord(
-        AssetManager mgr,
-        OpenWakeWordOptionsExample opts,
-        int deviceId,
-        String fifoInFileName,
-        String fifoOutFileName
-    );
-
+    public native void openWakeWord(AssetManager mgr, OpenWakeWordOptionsExample opts, int deviceId, String fifoInFileName, String fifoOutFileName);
     public static native void endOpenWakeWord();
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.d("~= OpenWakeWordService", "onStartCommand() lifeCycle: " + lifeCycle);
 
         Bundle extras = intent.getExtras();
         if (extras == null)
             return Service.START_REDELIVER_INTENT;
 
-        if (extras.getString("end") != null) {
-            ending = true;
-            stopSelf();
+        if (extras.getString("end") != null && lifeCycle.equals(1)) {
+            lifeCycle = 2;
+            endApp = true;
+            endOpenWakeWord();
+            return super.onStartCommand(intent, flags, startId);
+            // return Service.START_REDELIVER_INTENT;
+        }
+        else if (extras.getString("end") != null && lifeCycle.equals(22)) {
+            lifeCycle = 3;
+            return super.onStartCommand(intent, flags, startId);
+        }
+        else if (extras.getString("end") != null && lifeCycle.equals(4)) {
+            return super.onStartCommand(intent, flags, startId);
+        }
+        else if (extras.getString("stop") != null && lifeCycle.equals(1)) {
+            lifeCycle = 2;
+            stopApp = true;
+            endOpenWakeWord();
             return Service.START_REDELIVER_INTENT;
         }
-
-        if (isRunning.equals(true)) {
-            cppStart(Integer.valueOf(extras.getString("delayMS", "0")));
+        else if (lifeCycle.equals(1)) {
             return Service.START_REDELIVER_INTENT;
         }
+        else if (lifeCycle.equals(22)) {
+            lifeCycle = 23;
+            stopApp = false;
+            cppStart(extras, Integer.valueOf(extras.getString("delayMS", "0")));
+            return Service.START_REDELIVER_INTENT;
+        }
+        else if (lifeCycle.equals(4) && extras.getString("keyword") != null) {
+            Log.d("~= OpenWakeWordService", "STARTING");
 
-        if (extras.getString("keyword") != null) {
-            isRunning = true;
+            lifeCycle = 0;
+            endApp = false;
+            stopApp = false;
 
-            workerID = extras.getString("workerID");
-
-            String keyword = extras.getString("keyword", "models/alexa_v0.1.onnx");
-            String sensitivity = extras.getString("sensitivity", "0.5");
+            closeServiceAfterWakeWordActivation = Boolean.parseBoolean(extras.getString("closeServiceAfterWakeWordActivation", "false"));
+            requestID = extras.getString("requestID");
+            intentFilterBroadcastString = extras.getString("intentFilterBroadcastString");
 
             File dir = getFilesDir();
             if(!dir.exists()) dir.mkdir();
             fifoOutFileName = getFilesDir() + "/fifoOut";
             fifoInFileName = getFilesDir() + "/fifoIn";
         
-            Log.d("~= OpenWakeWordService", "onStartCommand - keyword: " + keyword + ", sensitivity: " + sensitivity);
-
-            NotificationCompat.Builder notification = new NotificationCompat.Builder(this, workerID)
+            NotificationCompat.Builder notification = new NotificationCompat.Builder(this, intentFilterBroadcastString)
                 .setAutoCancel(false)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle("JJAssistant")
@@ -124,52 +148,6 @@ public class OpenWakeWordServiceExample extends Service {
             }
             startForeground(99, notification.build(), type);
 
-            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                workerID,
-                ExistingPeriodicWorkPolicy.KEEP,
-                new PeriodicWorkRequest.Builder(OpenWakeWorkWorkerExample.class, 16 /* minimal minutes by documentation */, TimeUnit.MINUTES).build()
-            );
-
-            new File(fifoOutFileName).delete();
-
-            // stdout reader and callbeck
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    BufferedReader buffer = null;
-                    try {
-                        while (true) {
-                            try {
-                                Thread.sleep(200);
-                                buffer = new BufferedReader(new InputStreamReader(new FileInputStream(fifoOutFileName)));
-                                break;
-                            } catch (Exception ee) {}
-                        }
-
-                        while (true) {
-                            String line = buffer.readLine();
-
-                            if (line == null) Thread.sleep(200);
-                            else {
-                                String name = keyword.substring(7, keyword.length() -5);
-
-                                if (line.length() >= name.length() && name.equals(line.substring(1, name.length()+1)))
-                                    callback(line);
-                                else if (line.length() >= 7 && "[ERROR]".equals(line.substring(0, 7)))
-                                    callback(line, true);
-                                else
-                                    Log.d("~= OpenWakeWordService", "stdOut: " + line);
-                            }
-                        }
-                    } catch (Exception e) {
-                        Log.e("~= OpenWakeWordService", "stream output error: " + e.toString());
-                        try {
-                            if (buffer != null) buffer.close();
-                        } catch (Exception ee) {}
-                    }
-                }
-            }).start();
-
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             AudioDeviceInfo[] devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS);
             for (AudioDeviceInfo device : devices) {
@@ -179,36 +157,131 @@ public class OpenWakeWordServiceExample extends Service {
                 }
             }
 
-            opts.threshold = sensitivity;
-            opts.model = keyword;
-            opts.end_after_activation = endAfterActivation;
-            opts.trigger_level = "1";
+            new File(fifoOutFileName).delete();
 
-            cppStart();
+            // stdout reader and callbeck
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    BufferedReader buffer = null;
+                    try {
+                        while (!lifeCycle.equals(3)) {
+                            try {
+                                Thread.sleep(200);
+                                buffer = new BufferedReader(new InputStreamReader(new FileInputStream(fifoOutFileName)));
+                                break;
+                            } catch (Exception ee) {}
+                        }
+
+                        while (!lifeCycle.equals(3)) {
+                            String line = buffer.readLine();
+
+                            if (line == null) Thread.sleep(200);
+                            else {
+                                String name = opts.model.substring(7, opts.model.length() -5);
+
+                                if (line.contains("[LOG] Ready")) {
+                                    lifeCycle = 1;
+                                    callback("_STARTED");
+                                }
+
+                                if (line.length() >= name.length() && name.equals(line.substring(1, name.length()+1))) {
+                                    callback(line);
+
+                                    if (lifeCycle.equals(21)) {
+                                        lifeCycle = 22;
+                                        callback("_STOPPED");
+
+                                        if (endApp || closeServiceAfterWakeWordActivation) {
+                                            endApp = true;
+                                            lifeCycle = 3;
+                                        }
+                                    }
+                                    else if (lifeCycle.equals(1) || lifeCycle.equals(2))
+                                        lifeCycle = 21;
+                                }
+                                else if (line.length() >= 7 && "[ERROR]".equals(line.substring(0, 7)))
+                                    callback(line, true);
+                                else
+                                    Log.d("~= OpenWakeWordService", "stdOut: " + line);
+                            }
+                        }
+
+                        buffer.close();
+                        new File(fifoOutFileName).delete();
+
+                        stopSelf();
+                    } catch (Exception e) {
+                        Log.e("~= OpenWakeWordService", "stream output error: " + e.toString());
+                        try {
+                            if (buffer != null) buffer.close();
+                        } catch (Exception ee) {}
+                    }
+                }
+            }).start();
+
+            cppStart(extras, Integer.valueOf(extras.getString("delayMS", "0")));
+
+            // by returning this we make sure the service is restarted if the system kills the service
+            return Service.START_STICKY;
         }
-
-        // by returning this we make sure the service is restarted if the system kills the service
-        return Service.START_STICKY;
+        else {
+            Log.e("~= OpenWakeWordService", "App is in lifeCycle: " + lifeCycle + ", and is not ready to "
+                + (extras.getString("keyword") != null ? "start" : "")
+                + (extras.getString("end") != null ? "end" : "")
+                + (extras.getString("stop") != null ? "stop" : "")
+            );
+            return Service.START_REDELIVER_INTENT;
+        }
     }
 
-    public void cppStart() { cppStart(0); }
-    public void cppStart(int delayMS) {
-        mgr = getResources().getAssets();
+    public void cppStart(Bundle extras) { cppStart(extras, 0); }
+    public void cppStart(Bundle extras, int delayMS) {
+        if (extras.getString("keyword") != null) {
+            opts.model = extras.getString("keyword", "models/alexa_v0.1.onnx");
+            opts.threshold = extras.getString("sensitivity", "0.5");
+            opts.end_after_activation = true;
+            opts.trigger_level = "1";
+        }
 
-        if (cppIsRunning) return;
-        else cppIsRunning = true;
+        Log.d("~= OpenWakeWordService", "openWakeWord cpp and worker STARTING - keyword: " + opts.model + ", sensitivity: " + opts.threshold);
+
+        worker = WorkManager.getInstance(this);
+        worker.enqueueUniquePeriodicWork(
+            workerName,
+            ExistingPeriodicWorkPolicy.KEEP,
+            new PeriodicWorkRequest.Builder(OpenWakeWorkWorker.class, 16 /* minimal minutes by documentation */, TimeUnit.MINUTES).build()
+        );
+
+        mgr = getResources().getAssets();
 
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
                     if (delayMS > 0) Thread.sleep(delayMS); // If is needed time to mic audio input deallocation
+
                     openWakeWord(mgr, opts, deviceId, fifoInFileName, fifoOutFileName);
-                    Log.d("~= OpenWakeWordService", "openWakeWord END");
-                    cppIsRunning = false;
+
+                    worker.cancelUniqueWork(workerName);
+
+                    Log.d("~= OpenWakeWordService", "openWakeWord cpp and worker ENDED");
+
+                    if (stopApp || endApp || lifeCycle.equals(21)) {
+                        lifeCycle = 22;
+                        callback("_STOPPED");
+
+                        if (endApp || closeServiceAfterWakeWordActivation) {
+                            endApp = true;
+                            lifeCycle = 3;
+                        }
+                    }
+                    else if (lifeCycle.equals(1) || lifeCycle.equals(2))
+                        lifeCycle = 21;
                 } catch (Exception e) {
                     Log.e("~= OpenWakeWordService", "c++ error: " + e.toString());
                     callback(e.toString(), true);
+                    cppStart(extras);
                 }
             }
         }).start();
@@ -216,9 +289,20 @@ public class OpenWakeWordServiceExample extends Service {
 
     public void callback(String message) { callback(message, false); }
     public void callback(String message, Boolean error) {
-        if (error == false)
-             Log.d("~= OpenWakeWordService", "result: " + result);
-        else Log.e("~= OpenWakeWordService", "error: " + result);
+        try {
+            Log.d("~= OpenWakeWordService", "callback: " + message);
+
+            Intent intent2 = new Intent(intentFilterBroadcastString);
+
+            intent2.putExtra("requestID", requestID);
+            intent2.putExtra(error ? "error" : "result", message);
+
+            // message to app: _STARTED / _RESTARTME / _STOPPED / _ENDED / <wakeWord>
+            sendBroadcast(intent2);
+        } catch (Exception e) {
+            Log.e("~= OpenWakeWordService", "Resolve intent error: " + e.toString());
+            throw new RuntimeException(e);
+        }
     }
 
     @Nullable
@@ -227,23 +311,39 @@ public class OpenWakeWordServiceExample extends Service {
 
     @Override
     public void onDestroy() {
-        Log.d("~= OpenWakeWordService", "onDestroy");
+        // Android destroy service automaticly after same time.
+        // Android not need call this onDestroy(), that's why you must set worker, which will call this service each 16 minutes.
+        if (endApp.equals(false)) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Thread.sleep(1000);
 
-        endOpenWakeWord();
+                        Intent intent2 = new Intent(intentFilterBroadcastString);
 
-        isRunning = false;
-        cppIsRunning = false;
+                        intent2.putExtra("requestID", requestID);
+                        intent2.putExtra("result", "_RESTARTME");
+
+                        // please restart me
+                        sendBroadcast(intent2);
+                    } catch (Exception e) {
+                        Log.w("~= OpenWakeWordService", "onDestroy() restart error: " + e.toString());
+                    }
+                }
+            }).start();
+        } else {
+            try { worker.cancelUniqueWork(workerName); } catch (Exception e) {}
+            Log.d("~= OpenWakeWordService", "worker END");
+        }
+
+        lifeCycle = 4;
+        callback("_ENDED");
 
         stopForeground(true);
 
-        // Android destroy service automaticly after same time.
-        // Android not need call this onDestroy(), that's why you must set worker, which will call this service each 16 minutes.
-        if (ending == false) {
-            ... TODO: there call this service again
-        } else {
-            try { WorkManager.getInstance(this).cancelUniqueWork(workerID); } catch (Exception e) {}
-        }
-
         super.onDestroy();
+
+        Log.d("~= OpenWakeWordService", "...DESTROIED");
     }
 }
