@@ -1,13 +1,13 @@
 # https://mvnrepository.com/artifact/com.microsoft.onnxruntime/onnxruntime-android/1.16.3
 
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.22.1)
 
-project(openWakeWord C CXX)
+project(appmodules C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-string(APPEND CMAKE_CXX_FLAGS " -Wall -Wextra -Wl,-rpath,'$ORIGIN'")
+string(APPEND CMAKE_CXX_FLAGS " -Wall -Wextra") # -Wl,-rpath,'$ORIGIN'
 string(APPEND CMAKE_C_FLAGS " -Wall -Wextra")
 
 
