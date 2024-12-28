@@ -1,18 +1,18 @@
 package com.jjassistant;
 
 import android.app.Service;
+import android.app.Notification;
 import android.media.AudioManager;
 import android.media.AudioDeviceInfo;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ComponentName;
 import android.content.res.AssetManager;
+import android.content.pm.ServiceInfo;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Build;
 import android.util.Log;
-import android.app.Notification;
-import android.content.pm.ServiceInfo;
 
 import androidx.core.app.NotificationCompat;
 import androidx.annotation.Nullable;
@@ -75,8 +75,8 @@ public class OpenWakeWordServiceExample extends Service {
     private static String fifoOutFileName;
     private static String fifoInFileName;
     private static WorkManager worker;
+    private static String old_requestID = "";
 
-    public static String requestID;
     public static String intentFilterBroadcastString;
     public static String workerName = "JJPluginWakeWordServiceRestertWorker";
 
@@ -88,22 +88,32 @@ public class OpenWakeWordServiceExample extends Service {
         Log.d("~= OpenWakeWordService", "onStartCommand() lifeCycle: " + lifeCycle);
 
         Bundle extras = intent.getExtras();
-        if (extras == null)
+        if (extras == null) return Service.START_REDELIVER_INTENT;
+
+        String requestID = extras.getString("requestID");
+        intentFilterBroadcastString = extras.getString("intentFilterBroadcastString", intentFilterBroadcastString);
+
+        if (requestID.equals(old_requestID)) {
             return Service.START_REDELIVER_INTENT;
+        } else old_requestID = requestID;
 
         if (extras.getString("end") != null && lifeCycle.equals(1)) {
             lifeCycle = 2;
             endApp = true;
             endOpenWakeWord();
-            return super.onStartCommand(intent, flags, startId);
-            // return Service.START_REDELIVER_INTENT;
+            return Service.START_REDELIVER_INTENT;
         }
         else if (extras.getString("end") != null && lifeCycle.equals(22)) {
             lifeCycle = 3;
-            return super.onStartCommand(intent, flags, startId);
+            return Service.START_REDELIVER_INTENT;
         }
         else if (extras.getString("end") != null && lifeCycle.equals(4)) {
-            return super.onStartCommand(intent, flags, startId);
+            callback("_ENDED");
+            return Service.START_REDELIVER_INTENT;
+        }
+        else if (extras.getString("stop") != null && lifeCycle.equals(22)) {
+            callback("_STOPPED");
+            return Service.START_REDELIVER_INTENT;
         }
         else if (extras.getString("stop") != null && lifeCycle.equals(1)) {
             lifeCycle = 2;
@@ -112,6 +122,7 @@ public class OpenWakeWordServiceExample extends Service {
             return Service.START_REDELIVER_INTENT;
         }
         else if (lifeCycle.equals(1)) {
+            callback("_STARTED");
             return Service.START_REDELIVER_INTENT;
         }
         else if (lifeCycle.equals(22)) {
@@ -128,14 +139,12 @@ public class OpenWakeWordServiceExample extends Service {
             stopApp = false;
 
             closeServiceAfterWakeWordActivation = Boolean.parseBoolean(extras.getString("closeServiceAfterWakeWordActivation", "false"));
-            requestID = extras.getString("requestID");
-            intentFilterBroadcastString = extras.getString("intentFilterBroadcastString");
 
             File dir = getFilesDir();
             if(!dir.exists()) dir.mkdir();
             fifoOutFileName = getFilesDir() + "/fifoOut";
             fifoInFileName = getFilesDir() + "/fifoIn";
-        
+
             NotificationCompat.Builder notification = new NotificationCompat.Builder(this, intentFilterBroadcastString)
                 .setAutoCancel(false)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -226,11 +235,11 @@ public class OpenWakeWordServiceExample extends Service {
             return Service.START_STICKY;
         }
         else {
-            Log.e("~= OpenWakeWordService", "App is in lifeCycle: " + lifeCycle + ", and is not ready to "
+            String err = "App is in lifeCycle: " + lifeCycle + ", and is not ready to "
                 + (extras.getString("keyword") != null ? "start" : "")
                 + (extras.getString("end") != null ? "end" : "")
-                + (extras.getString("stop") != null ? "stop" : "")
-            );
+                + (extras.getString("stop") != null ? "stop" : "");
+            callback(err, true);
             return Service.START_REDELIVER_INTENT;
         }
     }
@@ -279,18 +288,22 @@ public class OpenWakeWordServiceExample extends Service {
                     else if (lifeCycle.equals(1) || lifeCycle.equals(2))
                         lifeCycle = 21;
                 } catch (Exception e) {
-                    Log.e("~= OpenWakeWordService", "c++ error: " + e.toString());
-                    callback(e.toString(), true);
+                    callback("c++ error: " + e.toString(), true);
                     cppStart(extras);
                 }
             }
         }).start();
     }
 
-    public void callback(String message) { callback(message, false); }
-    public void callback(String message, Boolean error) {
+    public void callback(String message) { callback(message, false, "openWakeWord"); }
+    public void callback(String message, Boolean error) { callback(message, error, "openWakeWord"); }
+    public void callback(String message, Boolean error, String requestID) {
         try {
-            Log.d("~= OpenWakeWordService", "callback: " + message);
+            // Thread.sleep(100);
+
+            if (error == true)
+                 Log.e("~= OpenWakeWordService", "callback error: " + message);
+            else Log.d("~= OpenWakeWordService", "callback result: " + message);
 
             Intent intent2 = new Intent(intentFilterBroadcastString);
 
@@ -322,7 +335,7 @@ public class OpenWakeWordServiceExample extends Service {
 
                         Intent intent2 = new Intent(intentFilterBroadcastString);
 
-                        intent2.putExtra("requestID", requestID);
+                        intent2.putExtra("requestID", "openWakeWord");
                         intent2.putExtra("result", "_RESTARTME");
 
                         // please restart me
@@ -346,4 +359,5 @@ public class OpenWakeWordServiceExample extends Service {
 
         Log.d("~= OpenWakeWordService", "...DESTROIED");
     }
+
 }
