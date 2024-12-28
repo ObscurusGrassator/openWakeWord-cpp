@@ -26,7 +26,7 @@ public class OpenWakeWorkWorkerExample extends Worker {
 
         Intent intent2 = new Intent(OpenWakeWordService.workerName);
 
-        intent2.putExtra("requestID", OpenWakeWordService.requestID);
+        intent2.putExtra("requestID", "openWakeWord");
         intent2.putExtra("result", "_RESTARTME");
 
         getApplicationContext().sendBroadcast(intent2);
